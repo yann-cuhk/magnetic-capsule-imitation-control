@@ -333,7 +333,7 @@ def Create_Magnetic_sphere(root_node, pose, totalMass, volume, inertiaMatrix, in
     capsule = root_node.addChild("magnetic_sphere")
 
     pose_capsule = capsule.addObject('MechanicalObject', name="mstate", template="Rigid3",
-                                     position=pose, showObject=True, showObjectScale=0.0)
+                                     position=pose, showObject=True, showObjectScale=0.02)
 
     capsule.addObject('UniformMass', name="mass",
                       vertexMass=[totalMass, volume, inertiaMatrix[:]])

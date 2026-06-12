@@ -1,9 +1,11 @@
+import os
 import numpy as np
 
 from Sofa_Interface.sofa_interface import *
 from Magnetic_Engine.permanent_magnet import *
 from Pose_Transform.pose_transform import *
 from scipy.linalg import pinv
+from scipy.spatial.transform import Rotation as R
 
 from Control_Package.controller_custom import *
 
@@ -22,6 +24,12 @@ k = 0
 
 def _wrap_robot_theta(theta):
     return (np.asarray(theta, dtype=float) + np.pi) % (2 * np.pi) - np.pi
+
+
+def _attitude_error_rotvec(current_pose, target_pose):
+    current_rotation = R.from_quat(current_pose[3:7])
+    target_rotation = R.from_quat(target_pose[3:7])
+    return (target_rotation * current_rotation.inv()).as_rotvec()
 
 
 def _set_current_label(scene, value):
@@ -124,7 +132,7 @@ def Create_Animate_Capsule_CloseLoop(scene, i, path, pose_estimate, pid, pid1):
         scene.magnetic_source[0]['link_pose_list'][i].position[0][:] = pose_list[i]
 
 
-def Create_Animate_Capsule_OpenLoop(scene, i, path, pose_estimate, pid, info=None):
+def Create_Animate_Capsule_OpenLoop(scene, i, path, pose_estimate, pid, pid1=None, info=None):
     # # 通过机械臂初始状态推出驱动磁铁的初始状态
     pa_, ma_hat_ = scene.magnetic_source[0]['robot'].fkine(scene.magnetic_source[0]['theta'])
     ma_norm = scene.magnetic_source[0]['moment']
@@ -163,22 +171,42 @@ def Create_Animate_Capsule_OpenLoop(scene, i, path, pose_estimate, pid, info=Non
 
     # 计算误差
     err = p_desired - pc
+    if direct_servo and int(i) % 20 == 0:
+        current_pos = np.asarray(pc, dtype=float).reshape(3)
+        target_pos = np.asarray(p_desired, dtype=float).reshape(3)
+        print("[MagRobotPosition] "
+              f"current=({current_pos[0]:.5f}, {current_pos[1]:.5f}, {current_pos[2]:.5f}) "
+              f"target=({target_pos[0]:.5f}, {target_pos[1]:.5f}, {target_pos[2]:.5f}) "
+              f"err={np.linalg.norm(err):.5f} m")
 
     # 得到应该施加的力和磁场方向
     force_desired = pid.pid(err)
     if direct_servo:
         max_force = float(info[8][0].get("max_force", 0.0012))
+        max_moment = float(info[8][0].get("max_moment", 8e-4))
         linear_damping = float(info[8][0].get("linear_damping", 0.02))
         angular_damping = float(info[8][0].get("angular_damping", 1e-7))
+        attitude_kp = float(info[8][0].get("attitude_kp", 2e-4))
+        attitude_damping = float(info[8][0].get("attitude_damping", 5e-5))
         target_stop_tolerance = float(info[8][0].get("target_stop_tolerance", 0.004))
         buoyancy_control = 0.0 if scene.instrument[0].get('buoyancy_in_model', False) else flotage
+        moment_to_apply = -v_angle * angular_damping
+        if pid1 is not None:
+            target_pose = position_moment_to_pose(p_desired, h_hat_desired)
+            rotvec_error = np.mat(_attitude_error_rotvec(scene.instrument[0]['position_active'][:], target_pose)).transpose()
+            attitude_moment = attitude_kp * rotvec_error - attitude_damping * v_angle
+            moment_to_apply += np.clip(attitude_moment, -max_moment, max_moment)
+            if os.environ.get("MAGROBOT_DEBUG_ATTITUDE") and int(i) % 20 == 0:
+                print("[MagRobotAttitude] "
+                      f"pos_err={np.linalg.norm(err):.5f} "
+                      f"angle_err={np.linalg.norm(rotvec_error):.5f} "
+                      f"moment={np.linalg.norm(moment_to_apply):.3e} "
+                      f"omega={np.linalg.norm(v_angle):.3e}")
         if np.linalg.norm(err) <= target_stop_tolerance:
             force_to_apply = np.array([[0], [0], [buoyancy_control]]) - v_pos * linear_damping
-            moment_to_apply = -v_angle * angular_damping
             sofa_interface.set_force_moment(scene.instrument[0]['force_torque_capsule'], force_to_apply, moment_to_apply)
             return
         force_to_apply = np.clip(force_desired, -max_force, max_force) + np.array([[0], [0], [buoyancy_control]]) - v_pos * linear_damping
-        moment_to_apply = -v_angle * angular_damping
         sofa_interface.set_force_moment(scene.instrument[0]['force_torque_capsule'], force_to_apply, moment_to_apply)
     force_change = force_desired - force
     h_hat_change = h_hat_desired - direction

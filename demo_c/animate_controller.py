@@ -48,7 +48,7 @@ class MagController(Sofa.Core.Controller):
 
         elif 'robot' in self.scene.magnetic_source[0] and self.info[2][0]["object"] == "capsule" and self.info[8][0]["control_type"] == "PID":
             # Create_Animate_Capsule_CloseLoop(self.scene, self.i, self.path, self.pose_estimate, self.pid, self.pid1)
-            Create_Animate_Capsule_OpenLoop(self.scene, self.i, self.path, self.pose_estimate, self.pid, self.info)
+            Create_Animate_Capsule_OpenLoop(self.scene, self.i, self.path, self.pose_estimate, self.pid, self.pid1, self.info)
 
         elif 'electromagnet' in self.scene.magnetic_source[0] and self.info[2][0]["object"] == "capsule" and self.info[8][0]["control_type"] == "PID":
             Create_Animate_Electromagnet_CloseLoop(self.scene, self.path,  self.pose_estimate, self.pid, self.pid1)

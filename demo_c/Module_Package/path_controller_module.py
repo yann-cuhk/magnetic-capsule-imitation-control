@@ -295,7 +295,7 @@ class YusheController(Sofa.Core.Controller):
 
         elif self.info[6][0]["type"] == "stomach_small":
             # Use only the final point of the stomach path as the control target.
-            final_offset = np.array([[0.000], [-0.112], [-0.025]])
+            final_offset = np.array([[0.000], [-0.112], [-0.010]])
             self.p_desired[0:3] = self.p_initial + final_offset
             direction = final_offset / np.linalg.norm(final_offset)
             self.h_hat_desired[0:3] = direction
