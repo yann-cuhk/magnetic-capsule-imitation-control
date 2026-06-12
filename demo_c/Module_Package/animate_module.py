@@ -8,6 +8,7 @@ from scipy.linalg import pinv
 from scipy.spatial.transform import Rotation as R
 
 from Control_Package.controller_custom import *
+from Control_Package.ADP import CONTROL_SIZE
 
 sofa_interface = Sofa_Interface()
 
@@ -35,6 +36,34 @@ def _attitude_error_rotvec(current_pose, target_pose):
 def _set_current_label(scene, value):
     if getattr(scene, "show_pose", None) is not None:
         scene.show_pose.name = value
+
+
+def _capsule_adp_state(scene, path, pc, v_pos, v_angle):
+    target_pose = position_moment_to_pose(path.p_desired, path.h_hat_desired)
+    rotvec_error = _attitude_error_rotvec(scene.instrument[0]['position_active'][:], target_pose)
+    return np.concatenate((
+        np.asarray(path.p_desired - pc, dtype=float).reshape(3),
+        np.asarray(rotvec_error, dtype=float).reshape(3),
+        np.asarray(v_pos, dtype=float).reshape(3),
+        np.asarray(v_angle, dtype=float).reshape(3),
+    ))
+
+
+def _clip_force_moment(u, info):
+    control_info = info[8][0]
+    max_force = float(control_info.get("max_force", 0.0012))
+    max_moment = float(control_info.get("max_moment", 8e-4))
+    u = np.asarray(u, dtype=float).reshape(CONTROL_SIZE)
+    u[:3] = np.clip(u[:3], -max_force, max_force)
+    u[3:] = np.clip(u[3:], -max_moment, max_moment)
+    return u
+
+
+def _apply_direct_capsule_force(scene, u):
+    u = np.asarray(u, dtype=float).reshape(CONTROL_SIZE)
+    force = np.mat(u[:3]).transpose()
+    moment = np.mat(u[3:]).transpose()
+    sofa_interface.set_force_moment(scene.instrument[0]['force_torque_capsule'], force, moment)
 
 
 def Create_Animate_Capsule_CloseLoop(scene, i, path, pose_estimate, pid, pid1):
@@ -244,6 +273,72 @@ def Create_Animate_Capsule_OpenLoop(scene, i, path, pose_estimate, pid, pid1=Non
     pose_list = scene.magnetic_source[0]['robot'].fkine_all_link(scene.magnetic_source[0]['theta'])
     for i in range(len(scene.magnetic_source[0]['link_pose_list'])):
         scene.magnetic_source[0]['link_pose_list'][i].position[0][:] = pose_list[i]
+
+
+def Create_Animate_Capsule_ADPCollect(scene, i, path, pose_estimate, pid, pid1, info, recorder):
+    pc = pose_estimate.p_pose
+    v_pos = np.array([scene.instrument[0]['velocity_active'][0:3]]).transpose()
+    v_angle = np.array([scene.instrument[0]['velocity_active'][3:6]]).transpose()
+    x = _capsule_adp_state(scene, path, pc, v_pos, v_angle)
+
+    control_info = info[8][0]
+    err = path.p_desired - pc
+    force_desired = pid.pid(err)
+    buoyancy_control = 0.0 if scene.instrument[0].get('buoyancy_in_model', False) else scene.instrument[0]['flotage']
+    linear_damping = float(control_info.get("linear_damping", 0.02))
+    angular_damping = float(control_info.get("angular_damping", 1e-7))
+    attitude_kp = float(control_info.get("attitude_kp", 2e-4))
+    attitude_damping = float(control_info.get("attitude_damping", 5e-5))
+    target_stop_tolerance = float(control_info.get("target_stop_tolerance", 0.004))
+
+    moment_to_apply = -v_angle * angular_damping
+    if pid1 is not None:
+        target_pose = position_moment_to_pose(path.p_desired, path.h_hat_desired)
+        rotvec_error = np.mat(_attitude_error_rotvec(scene.instrument[0]['position_active'][:], target_pose)).transpose()
+        moment_to_apply += attitude_kp * rotvec_error - attitude_damping * v_angle
+
+    if np.linalg.norm(err) <= target_stop_tolerance:
+        force_to_apply = np.array([[0], [0], [buoyancy_control]]) - v_pos * linear_damping
+    else:
+        force_to_apply = force_desired + np.array([[0], [0], [buoyancy_control]]) - v_pos * linear_damping
+
+    u = np.concatenate((np.asarray(force_to_apply).reshape(3), np.asarray(moment_to_apply).reshape(3)))
+    u = _clip_force_moment(u + recorder.exploration(), info)
+    _apply_direct_capsule_force(scene, u)
+    recorder.record(i / 100.0, x, u)
+
+    if int(i) % 50 == 0:
+        print(f"[MagRobotADPCollect] samples={recorder.rows} err={np.linalg.norm(err):.5f} m")
+
+
+def Create_Animate_Capsule_ADP(scene, i, path, pose_estimate, adp_policy, info):
+    pc = pose_estimate.p_pose
+    v_pos = np.array([scene.instrument[0]['velocity_active'][0:3]]).transpose()
+    v_angle = np.array([scene.instrument[0]['velocity_active'][3:6]]).transpose()
+    x = _capsule_adp_state(scene, path, pc, v_pos, v_angle)
+    u = _clip_force_moment(adp_policy.control(x), info)
+    _apply_direct_capsule_force(scene, u)
+
+    control_info = info[8][0]
+    print_interval = int(control_info.get("print_interval", 20))
+    if print_interval > 0 and int(i) % print_interval == 0:
+        current_pos = np.asarray(pc, dtype=float).reshape(3)
+        target_pos = np.asarray(path.p_desired, dtype=float).reshape(3)
+        error_vec = target_pos - current_pos
+        print("[MagRobotADPPosition] "
+              f"mode={adp_policy.last_mode} "
+              f"current=({current_pos[0]:.5f}, {current_pos[1]:.5f}, {current_pos[2]:.5f}) "
+              f"target=({target_pos[0]:.5f}, {target_pos[1]:.5f}, {target_pos[2]:.5f}) "
+              f"error=({error_vec[0]:.5f}, {error_vec[1]:.5f}, {error_vec[2]:.5f}) "
+              f"err_norm={np.linalg.norm(error_vec):.5f} m")
+
+    if os.environ.get("MAGROBOT_DEBUG_ADP") and int(i) % 20 == 0:
+        print("[MagRobotADP] "
+              f"mode={adp_policy.last_mode} "
+              f"err={np.linalg.norm(x[:3]):.5f} "
+              f"angle_err={np.linalg.norm(x[3:6]):.5f} "
+              f"force={np.linalg.norm(u[:3]):.3e} "
+              f"moment={np.linalg.norm(u[3:]):.3e}")
 
 
 def Create_Animate_Electromagnet_CloseLoop(scene, path, pose_estimate, pid, pid1):

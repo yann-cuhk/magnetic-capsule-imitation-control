@@ -1,6 +1,7 @@
 import Sofa
 from Module_Package.animate_module import *
 from Control_Package.Pid import *
+from Control_Package.ADP import ADPDataRecorder, ADPPolicy
 import shutil
 # dt = 0.03
 
@@ -16,6 +17,8 @@ class MagController(Sofa.Core.Controller):
         self.path = path
         self.pose_estimate = pose_estimate
         self.info = info
+        self.adp_data_recorder = None
+        self.adp_policy = None
 
         if info[8] == []:
             pass
@@ -34,6 +37,14 @@ class MagController(Sofa.Core.Controller):
 
         elif info[8][0]["control_type"] == "custom":
             shutil.copy2(info[8][0]["file_path"], "Control_Package/controller_custom.py")
+
+        elif info[8][0]["control_type"] == "ADP_collect":
+            self.pid = Pid(kp=info[8][0]["kp"], ki=info[8][0]["ki"], kd=info[8][0]["kd"], dt=self.scene.dt, coefficient=1.53e-3)
+            self.pid1 = Pid(kp=info[8][0]["kp2"], ki=info[8][0]["ki2"], kd=info[8][0]["kd2"], dt=self.scene.dt, coefficient=1.53e-11)
+            self.adp_data_recorder = ADPDataRecorder(info[8][0])
+
+        elif info[8][0]["control_type"] == "ADP":
+            self.adp_policy = ADPPolicy(info[8][0])
 
         self.sofa_interface = Sofa_Interface()
 
@@ -56,6 +67,12 @@ class MagController(Sofa.Core.Controller):
 
         elif 'Helmholtz' in self.scene.magnetic_source[0] and 'Maxwell' in self.scene.magnetic_source[0] and self.info[2][0]["object"] == "capsule" and self.info[8][0]["control_type"] == "PID":
             Create_Animate_Helmholtz_Maxwell_OpenLoop(self.scene, self.path, self.pose_estimate, self.pid)
+
+        elif 'robot' in self.scene.magnetic_source[0] and self.info[2][0]["object"] == "capsule" and self.info[8][0]["control_type"] == "ADP_collect":
+            Create_Animate_Capsule_ADPCollect(self.scene, self.i, self.path, self.pose_estimate, self.pid, self.pid1, self.info, self.adp_data_recorder)
+
+        elif 'robot' in self.scene.magnetic_source[0] and self.info[2][0]["object"] == "capsule" and self.info[8][0]["control_type"] == "ADP":
+            Create_Animate_Capsule_ADP(self.scene, self.i, self.path, self.pose_estimate, self.adp_policy, self.info)
 
         elif 'robot' in self.scene.magnetic_source[0] and self.info[2][0]["object"] == "wire" and self.info[8][0]["control_type"] == "wire_kaihuan":
             Create_Animate_wire_rob_2(self.scene, self.path, self.pose_estimate, self.field_norm)
