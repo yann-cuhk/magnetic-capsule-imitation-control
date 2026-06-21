@@ -1,42 +1,125 @@
-# single_capsule_stomach
+# Magnetic Capsule Imitation-Learned Control
 
-This is a focused MagRobot macOS package for the single-manipulator, single-capsule, soft-stomach scene.
+This repository contains a SOFA simulation workflow for magnetic capsule navigation in a deformable stomach environment. The current controller is **Imitation-learned control**: a learned state-to-force/moment policy commands the capsule, and a Jacobian inverse actuation layer converts the desired magnetic force and moment into robot-mounted magnet motion.
 
-## Scene
+## Demo
 
-- Config: `demo_c/GUI_interface/info_case3_single_capsule_stomach.txt`
-- Environment: `soft_static` stomach using `model/environment/stomach.stl` and `model/environment/stomach.msh`
-- Instrument: one magnetic capsule
-- Magnetic source: one robotic manipulator carrying a permanent magnet
-- Path mode: `yushe`, type `stomach_small`
-- Control mode: automatic `PID`
+![Demo animation: SOFA GUI on the left and capsule motion on the right](demo.gif)
 
-This scene is automatic. Keyboard manual controls are not the main control path for this config.
+The demo animation shows the live SOFA GUI simulation on the left and the generated capsule motion animation from the pose log on the right.
 
-## Run
+## Upstream Project and Contribution
 
-From this folder:
+This project is a modified, capsule-focused version of [MagRobotics/MagRobot](https://github.com/MagRobotics/MagRobot), an open-source SOFA-based simulation platform for magnetically navigated robots.
+
+The original MagRobot project provides the general magnetic robot simulation framework, SOFA scene structure, magnetic actuation models, and baseline simulation modules. Its README describes a Windows-oriented, precompiled workflow. This repository keeps the magnetic capsule workflow needed for the current imitation-learned controller and adapts it for local macOS deployment with SOFA.
+
+The main contribution of this repository is the **Imitation-learned control** workflow for magnetic capsule navigation:
+
+- Imitation-learned capsule force/moment control from demonstration data.
+- Jacobian inverse actuation from desired capsule force/moment to robot joint updates.
+- Global recovery waypoints for difficult initial capsule positions.
+- macOS run scripts and local SOFA path setup for capsule simulation.
+- Runtime logging for checking the `<1 mm` position and `<1 deg` posture target.
+
+This repository is not an official MagRobotics release.
+
+## Simulation Setup
+
+The current setup focuses on a magnetically actuated capsule. A robot-mounted permanent magnet generates the external magnetic actuation, while the capsule moves through the stomach scene under contact, gravity, buoyancy, fluid damping, and magnetic force or moment commands.
+
+## Repository Layout
+
+- `source/`: SOFA scene, control code, model assets, learned policy artifacts, and configuration files.
+- `source/Control_Package/ImitationLearnedPolicy.py`: runtime Imitation-learned control policy loader and force/moment inference path.
+- `source/Control_Package/ilc_policy.npz`: current learned force/moment policy artifact used by the online controller.
+- `source/GUI_interface/info_magnetic_capsule_ilc_global.txt`: current global Imitation-learned control configuration.
+- `source/post_processing/ilc_global_pose_log.csv`: pose log used to inspect the current control result.
+- `demo.gif`: inline README demonstration showing the SOFA GUI and capsule motion side by side.
+- `run_ilc.sh`: preferred launcher for Imitation-learned control.
+- `run_gui.sh`: runs a selected SOFA config with the SOFA GUI.
+- `run_batch.sh`: runs a selected SOFA config in headless batch mode.
+
+## Control Method
+
+At each SOFA step, the controller builds a capsule tracking state:
+
+```text
+x = [position error, posture error, linear velocity, angular velocity]
+```
+
+The Imitation-learned control policy maps this state to a desired magnetic force and moment:
+
+```text
+u = [force, moment]
+```
+
+The robot update layer then solves a Jacobian inverse problem to move the robot-mounted magnet so that the generated magnetic force and moment track the desired command.
+
+## GUI Run
+
+Run commands from the repository root.
+
+```bash
+./run_ilc.sh gui
+```
+
+This launches the current Imitation-learned control configuration with the SOFA ImGui interface.
+
+The generic GUI wrapper also launches the current online controller by default:
 
 ```bash
 ./run_gui.sh
 ```
 
-Batch validation:
+## Batch Run
+
+For repeatable headless validation:
 
 ```bash
-./run_batch.sh
+./run_ilc.sh batch
 ```
 
-The scripts expect the local SOFA install at `/Users/young/Documents/SOFA` and Python dependencies in `/Users/young/sofa_py312`, matching the existing Mac deployment.
+Batch mode is useful for repeatable verification because it runs the same SOFA scene without opening the GUI.
 
-## Contents
+## Precision Target
 
-- `demo_c/main.py`: SOFA scene entry point
-- `demo_c/create_scene.py`: scene assembly
-- `demo_c/simulator_setting.py`: SOFA physics setup
-- `demo_c/Module_Package`: SOFA object and controller helpers
-- `demo_c/Magnetic_Engine`: magnetic field, force, torque, and inverse calculations
-- `demo_c/model`: required mesh and visualization assets
-- `demo_c/GUI_interface/info_case3_single_capsule_stomach.txt`: the selected scene config
+The target control accuracy is:
 
-Large test reports from the full repository are intentionally excluded.
+```text
+position error < 1 mm
+posture error < 1 deg
+```
+
+## Main Outputs
+
+- `source/post_processing/ilc_global_pose_log.csv`: online pose log generated by the current GUI/batch controller.
+- `demo.gif`: side-by-side README animation; the left panel is the SOFA GUI, and the right panel is the capsule motion animation.
+- Terminal logs from `run_gui.sh` or `run_batch.sh`: tracking mode, robot update mode, capsule position, target position, and tracking error.
+
+## Visualization Result
+
+The pose log records capsule position, capsule quaternion orientation, target pose, tracking error, attitude error, and applied control norms during online Imitation-learned control. The included [`demo.gif`](demo.gif) combines the live SOFA GUI on the left with the capsule motion animation on the right.
+
+## Requirements
+
+This repository is configured for local macOS deployment with SOFA. The run scripts use these environment variables:
+
+- `SOFA_ROOT`: path to the local SOFA installation. Default: `${HOME}/Documents/SOFA`.
+- `PY312_SITE`: path to the Python 3.12 site-packages directory used by the SOFA Python environment. Default: `${HOME}/sofa_py312/lib/python3.12/site-packages`.
+- `MPLCONFIGDIR`: temporary matplotlib config directory. Default: `${TMPDIR:-/tmp}/magrobot-matplotlib`.
+
+If your SOFA installation is in a different location, set these variables before running the scripts:
+
+```bash
+export SOFA_ROOT=/path/to/SOFA
+export PY312_SITE=/path/to/python3.12/site-packages
+```
+
+## License
+
+The upstream MagRobot README states that MagRobot is distributed under the GNU General Public License, version 3 or later. Because this repository is derived from MagRobot, this repository is distributed under the same GPL-3.0-or-later terms. See [`LICENSE`](LICENSE) for the GPLv3 license text.
+
+Original MagRobot code and assets remain attributed to the MagRobot authors and contributors. The Imitation-learned control workflow and project cleanup in this repository are modifications built on top of that upstream work.
+
+For commercial or non-GPL licensing of upstream MagRobot components, contact the original MagRobot authors. This repository does not grant any separate license to upstream MagRobot code or assets.
